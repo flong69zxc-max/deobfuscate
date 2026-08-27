@@ -1,4 +1,4 @@
-name: Full Deobfuscation Pipeline
+name: Deobfuscate JS
 
 on:
   push:
@@ -18,119 +18,14 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install all deobfuscation tools
-        run: |
-          npm install -g js-beautify
-          npm install -g webcrack
-          npm install -g de4js
-          npm install -g obfuscator-unpacker
-          pip install beautifulsoup4
+      - name: Install webcrack
+        run: npm install -g webcrack
 
-      - name: Extract JS by removing 13-byte header
-        run: tail -c +14 agent.js > stage1_extracted.js
+      - name: Run deobfuscation
+        run: webcrack agent.js > deobfuscated.js
 
-      - name: Stage 2 - Clean non-printable characters
-        run: |
-          python3 -c "
-          import re
-          with open('stage1_extracted.js', 'rb') as f:
-              data = f.read()
-          clean = re.sub(rb'[^\x20-\x7E\n\r\t]', b'', data)
-          with open('stage2_cleaned.js', 'wb') as out:
-              out.write(clean)
-          print(f'Cleaned: {len(data)} -> {len(clean)} bytes')
-          "
-
-      - name: Stage 3 - js-beautify
-        run: |
-          js-beautify stage2_cleaned.js > stage3_beautified.js 2>/dev/null || true
-          if [ -s stage3_beautified.js ]; then
-            echo "js-beautify completed"
-          else
-            cp stage2_cleaned.js stage3_beautified.js
-            echo "js-beautify failed, keeping original"
-          fi
-
-      - name: Stage 4 - webcrack deobfuscation
-        run: |
-          webcrack stage3_beautified.js > stage4_webcrack.js 2>/dev/null || true
-          if [ -s stage4_webcrack.js ]; then
-            echo "webcrack completed"
-          else
-            cp stage3_beautified.js stage4_webcrack.js
-            echo "webcrack failed, keeping previous stage"
-          fi
-
-      - name: Stage 5 - de4js deobfuscation
-        run: |
-          de4js -i stage4_webcrack.js -o stage5_de4js.js 2>/dev/null || true
-          if [ -s stage5_de4js.js ]; then
-            echo "de4js completed"
-          else
-            cp stage4_webcrack.js stage5_de4js.js
-            echo "de4js failed, keeping previous stage"
-          fi
-
-      - name: Stage 6 - Remove eval and function wrappers
-        run: |
-          python3 -c "
-          import re
-          with open('stage5_de4js.js', 'r', encoding='utf-8', errors='ignore') as f:
-              content = f.read()
-          
-          # Распаковываем eval('...') если это обертка
-          eval_match = re.search(r'^eval\s*\(\s*([\'"])(.*?)\1\s*\)\s*;?\s*$', content, re.DOTALL)
-          if eval_match:
-              content = eval_match.group(2)
-              # Экранируем обратно
-              content = content.encode('utf-8').decode('unicode_escape')
-          
-          # Убираем обертки (function(){...})()
-          wrapper_match = re.search(r'^\(\s*function\s*\(\)\s*\{\s*(.*)\s*\}\)\s*\(\s*\)\s*;?\s*$', content, re.DOTALL)
-          if wrapper_match:
-              content = wrapper_match.group(1)
-          
-          with open('stage6_unwrapped.js', 'w', encoding='utf-8') as out:
-              out.write(content)
-          "
-
-      - name: Stage 7 - Final beautify
-        run: |
-          js-beautify stage6_unwrapped.js > final.js 2>/dev/null || true
-          if [ ! -s final.js ]; then
-            cp stage6_unwrapped.js final.js
-          fi
-
-      - name: Generate stats
-        run: |
-          echo "## Deobfuscation Results" > stats.md
-          echo "" >> stats.md
-          echo "| Stage | Size (bytes) |" >> stats.md
-          echo "|-------|-------------|" >> stats.md
-          for f in stage*.js final.js; do
-            if [ -f "$f" ]; then
-              size=$(wc -c < "$f" | xargs)
-              echo "| $f | $size |" >> stats.md
-            fi
-          done
-          echo "" >> stats.md
-          echo "### First 1000 chars:" >> stats.md
-          echo '```' >> stats.md
-          head -c 1000 final.js >> stats.md
-          echo '```' >> stats.md
-
-      - name: Upload final result
+      - name: Upload result
         uses: actions/upload-artifact@v4
         with:
           name: deobfuscated-code
-          path: |
-            final.js
-            stats.md
-
-      - name: Upload all stages for debugging
-        uses: actions/upload-artifact@v4
-        with:
-          name: all-stages
-          path: |
-            stage*.js
-            final.js
+          path: deobfuscated.js
