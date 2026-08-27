@@ -18,11 +18,33 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Clean binary garbage
+        run: |
+          python3 -c "
+          with open('agent.js', 'rb') as f:
+              data = f.read()
+          
+          start = 13
+          
+          end = len(data)
+          for i in range(len(data) - 1, -1, -1):
+              if data[i] == 0x7d:
+                  end = i + 1
+                  break
+          
+          clean = data[start:end]
+          
+          with open('cleaned.js', 'wb') as out:
+              out.write(clean)
+          
+          print(f'Cleaned: {len(data)} -> {len(clean)} bytes')
+          "
+
       - name: Install webcrack
         run: npm install -g webcrack
 
       - name: Run deobfuscation
-        run: webcrack agent.js > deobfuscated.js
+        run: webcrack cleaned.js > deobfuscated.js
 
       - name: Upload result
         uses: actions/upload-artifact@v4
