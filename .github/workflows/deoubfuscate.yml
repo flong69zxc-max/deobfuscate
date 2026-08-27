@@ -1,133 +1,93 @@
-name: Full Deobfuscation
+name: Extract VM Output
 
 on:
-  push:
-    paths:
-      - 'agent.js'
   workflow_dispatch:
 
 jobs:
-  deobfuscate:
+  extract:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Deobfuscate
+      - name: Run VM and capture
         run: |
-          cat > deobfuscate.js << 'EOF'
+          cat > extract.js << 'EOF'
+          const fs = require('fs');
+          
+          // Загружаем код
+          const code = fs.readFileSync('agent.js', 'utf8');
+          
+          // Создаем перехватчик для wEcR3bC (главная функция VM)
+          const originalCode = code.replace(
+            /function wEcR3bC\([^)]*\)\s*\{\s*\}/,
+            `function wEcR3bC(...args) {
+              console.log('[VM_INSTR]', args.map(a => typeof a === 'function' ? '[Function]' : a).join(', '));
+              return args[args.length - 1];
+            }`
+          );
+          
+          // Добавляем перехват результатов
+          const wrapper = `
           const fs = require('fs');
           const vm = require('vm');
           
-          let code = fs.readFileSync('agent.js', 'utf8');
-          
-          // Извлекаем массив и строку из кода
-          const arrayMatch = code.match(/var tj09YHa = \[([^\]]+)\]/);
-          const stringMatch = code.match(/var VHZh42 = "([^"]+)"/);
-          
-          if (!arrayMatch || !stringMatch) {
-            console.log('Could not find array or string');
-            process.exit(1);
-          }
-          
-          // Создаем контекст с перехватом
-          const context = {
+          const sandbox = {
             console: console,
             process: process,
             Buffer: Buffer,
             setTimeout: setTimeout,
             setInterval: setInterval,
-            // Заглушки для функций
-            zQD7ADR: () => {},
-            yhIwiod: () => {},
-            bNou7B: () => {},
-            kruj0XB: () => {},
-            // Сам дешифратор
+            // Подменяем w7pcVa чтобы логировать расшифрованные строки
             w7pcVa: function(seed, index, length) {
-              const result = this._w7pcVa(seed, index, length);
-              console.log(`[DECRYPT] ${seed}, ${index}, ${length} => "${result}"`);
-              return result;
-            },
-            _w7pcVa: function(seed, index, length) {
-              let result = "";
-              const VHZh42 = stringMatch[1];
+              const VHZh42 = "${code.match(/var VHZh42 = "([^"]+)"/)[1]}";
+              let result = '';
               for (let i = 0; i < length; i++) {
                 const key = ((seed ^ seed >>> 13) % 95 + 95) % 95;
                 const enc = VHZh42.charCodeAt(index + i) - 32;
                 const dec = ((enc - key) % 95 + 95) % 95;
                 result += String.fromCharCode(dec + 32);
               }
+              console.log('[DECRYPT]', result);
               return result;
+            },
+            // Подменяем все функции, чтобы они логировали
+            zQD7ADR: function(x) { return x; },
+            yhIwiod: function(x) { return 0; },
+            bNou7B: function(a,b) { return []; },
+            kruj0XB: function(a,b,c,d) { 
+              console.log('[VM_CALL]', a, b, c);
+              return b; 
             }
           };
           
-          vm.createContext(context);
+          vm.createContext(sandbox);
           
-          // Выполняем код в контексте
           try {
-            vm.runInContext(code, context, { timeout: 10000 });
+            const result = vm.runInContext(\`${originalCode}\`, sandbox, {
+              timeout: 30000,
+              displayErrors: true
+            });
+            console.log('Execution completed');
           } catch(e) {
-            console.log('Execution error:', e.message);
+            console.log('Error:', e.message);
           }
+          `;
+          
+          fs.writeFileSync('run.js', wrapper);
+          node run.js 2>&1 | tee output.log
           EOF
 
-      - name: Run deobfuscator
-        run: node deobfuscate.js 2>&1 | tee decrypted.log
+      - name: Run extraction
+        run: node extract.js
 
-      - name: Extract and replace strings
-        run: |
-          node -e "
-          const fs = require('fs');
-          let code = fs.readFileSync('agent.js', 'utf8');
-          
-          // Извлекаем VHZh42
-          const strMatch = code.match(/var VHZh42 = \"([^\"]+)\"/);
-          const VHZh42 = strMatch ? strMatch[1] : '';
-          
-          function w7pcVa(seed, index, length) {
-            let result = '';
-            for (let i = 0; i < length; i++) {
-              const key = ((seed ^ seed >>> 13) % 95 + 95) % 95;
-              const enc = VHZh42.charCodeAt(index + i) - 32;
-              const dec = ((enc - key) % 95 + 95) % 95;
-              result += String.fromCharCode(dec + 32);
-            }
-            return result;
-          }
-          
-          // Находим все вызовы w7pcVa
-          const pattern = /w7pcVa\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/g;
-          let match;
-          while ((match = pattern.exec(code)) !== null) {
-            const [_, seed, index, length] = match.map(Number);
-            const result = w7pcVa(seed, index, length);
-            const fullMatch = match[0];
-            // Экранируем кавычки
-            const escaped = result.replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"');
-            code = code.replace(fullMatch, `\"${escaped}\"`);
-          }
-          
-          fs.writeFileSync('deobfuscated.js', code);
-          console.log('Replaced all w7pcVa calls with decrypted strings');
-          "
-
-      - name: Final beautify
-        run: |
-          npm install -g js-beautify
-          js-beautify deobfuscated.js > final.js 2>/dev/null || true
-          if [ ! -s final.js ]; then
-            cp deobfuscated.js final.js
-          fi
-
-      - name: Upload results
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: deobfuscated-code
-          path: |
-            final.js
-            decrypted.log
+          name: vm-output
+          path: output.log
