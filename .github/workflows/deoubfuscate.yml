@@ -1,4 +1,4 @@
-name: Deobfuscate JS
+name: Deobfuscate Custom VM
 
 on:
   push:
@@ -18,36 +18,55 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Clean binary garbage
+      - name: Install de4js
+        run: npm install -g de4js
+
+      - name: Run de4js
+        run: de4js -i agent.js -o de4js_output.js
+
+      - name: Try to extract strings by execution
         run: |
-          python3 -c "
-          with open('agent.js', 'rb') as f:
-              data = f.read()
+          node -e "
+          const fs = require('fs');
+          const vm = require('vm');
           
-          start = 13
+          let code = fs.readFileSync('de4js_output.js', 'utf8');
           
-          end = len(data)
-          for i in range(len(data) - 1, -1, -1):
-              if data[i] == 0x7d:
-                  end = i + 1
-                  break
+          // Добавляем перехватчики в начало
+          const wrapper = \`
+          const originalConsole = console.log;
+          const decrypted = {};
           
-          clean = data[start:end]
+          // Перехватываем w7pcVa
+          const original_w7pcVa = w7pcVa;
+          w7pcVa = function(seed, idx, len) {
+            const result = original_w7pcVa(seed, idx, len);
+            if (result && result.length > 2) {
+              console.log('DECRYPTED_STRING:', result);
+              decrypted[idx] = result;
+            }
+            return result;
+          };
           
-          with open('cleaned.js', 'wb') as out:
-              out.write(clean)
+          \` + code;
           
-          print(f'Cleaned: {len(data)} -> {len(clean)} bytes')
+          try {
+            vm.runInNewContext(wrapper, {
+              console: console,
+              process: process,
+              Buffer: Buffer,
+              setTimeout: setTimeout,
+              setInterval: setInterval
+            }, { timeout: 10000 });
+          } catch(e) {
+            console.log('Execution error:', e.message);
+          }
           "
-
-      - name: Install webcrack
-        run: npm install -g webcrack
-
-      - name: Run deobfuscation
-        run: webcrack cleaned.js > deobfuscated.js
 
       - name: Upload result
         uses: actions/upload-artifact@v4
         with:
           name: deobfuscated-code
-          path: deobfuscated.js
+          path: |
+            de4js_output.js
+            extracted_strings.txt
