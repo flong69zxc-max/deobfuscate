@@ -16,13 +16,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22' 
+          node-version: '22'
+
+      - name: Remove binary header
+        run: |
+          tail -c +14 agent.js > extracted.js
+          echo "Removed first 13 bytes, output to extracted.js"
 
       - name: Install webcrack
         run: npm install -g webcrack
 
-      - name: Run deobfuscation
-        run: webcrack agent.js > deobfuscated.js
+      - name: Deobfuscate extracted JS
+        run: webcrack extracted.js > deobfuscated.js
 
       - name: Upload result
         uses: actions/upload-artifact@v4
