@@ -19,54 +19,54 @@ jobs:
           node-version: '22'
 
       - name: Install de4js
-        run: npm install -g de4js
+        run: |
+          npm install -g de4js
+          which de4js || echo "de4js not found"
 
       - name: Run de4js
-        run: de4js -i agent.js -o de4js_output.js
+        run: |
+          npx de4js -i agent.js -o de4js_output.js || echo "npx de4js failed"
 
-      - name: Try to extract strings by execution
+      - name: Try manual extraction
         run: |
           node -e "
           const fs = require('fs');
           const vm = require('vm');
           
-          let code = fs.readFileSync('de4js_output.js', 'utf8');
+          const code = fs.readFileSync('agent.js', 'utf8');
           
-          // Добавляем перехватчики в начало
-          const wrapper = \`
-          const originalConsole = console.log;
-          const decrypted = {};
-          
-          // Перехватываем w7pcVa
-          const original_w7pcVa = w7pcVa;
-          w7pcVa = function(seed, idx, len) {
-            const result = original_w7pcVa(seed, idx, len);
-            if (result && result.length > 2) {
-              console.log('DECRYPTED_STRING:', result);
-              decrypted[idx] = result;
-            }
-            return result;
+          const sandbox = {
+            console: {
+              log: (...args) => {
+                if (args[0] && typeof args[0] === 'string' && args[0].length > 3) {
+                  console.log('[EXTRACT]', args[0]);
+                }
+              }
+            },
+            process: process,
+            Buffer: Buffer,
+            setTimeout: setTimeout,
+            setInterval: setInterval
           };
           
-          \` + code;
+          vm.createContext(sandbox);
           
           try {
-            vm.runInNewContext(wrapper, {
-              console: console,
-              process: process,
-              Buffer: Buffer,
-              setTimeout: setTimeout,
-              setInterval: setInterval
-            }, { timeout: 10000 });
-          } catch(e) {
-            console.log('Execution error:', e.message);
+            const result = vm.runInContext(code, sandbox, {
+              timeout: 5000,
+              displayErrors: true
+            });
+            console.log('Execution completed');
+          } catch (e) {
+            console.log('Error:', e.message);
           }
-          "
+          " 2>&1 | tee extracted_strings.txt
 
       - name: Upload result
         uses: actions/upload-artifact@v4
         with:
           name: deobfuscated-code
           path: |
+            agent.js
             de4js_output.js
             extracted_strings.txt
