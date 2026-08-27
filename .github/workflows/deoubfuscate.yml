@@ -1,10 +1,10 @@
-name: Extract VM Output
+name: Decrypt Frida Agent
 
 on:
   workflow_dispatch:
 
 jobs:
-  extract:
+  decrypt:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -15,9 +15,9 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Run VM and capture
+      - name: Extract strings
         run: |
-          cat > extract.js << 'EOF'
+          cat > decrypt.js << 'EOF'
           const fs = require('fs');
           const vm = require('vm');
           
@@ -26,11 +26,16 @@ jobs:
           const VHZh42 = code.match(/var VHZh42 = "([^"]+)"/)[1];
           
           const sandbox = {
-            console: console,
+            console: {
+              log: (...args) => console.log('[LOG]', ...args),
+              error: (...args) => console.log('[ERR]', ...args)
+            },
             process: process,
             Buffer: Buffer,
             setTimeout: setTimeout,
             setInterval: setInterval,
+            clearTimeout: clearTimeout,
+            clearInterval: clearInterval,
             
             w7pcVa: function(seed, index, length) {
               let result = '';
@@ -40,30 +45,61 @@ jobs:
                 const dec = ((enc - key) % 95 + 95) % 95;
                 result += String.fromCharCode(dec + 32);
               }
-              console.log('[STRING]', result);
+              console.log('[DECRYPTED]', result);
               return result;
             },
             
-            zQD7ADR: () => 0,
-            yhIwiod: () => 0,
-            bNou7B: () => [],
-            kruj0XB: () => {},
-            wEcR3bC: () => {}
+            zQD7ADR: (x) => x,
+            yhIwiod: (arr) => arr.length,
+            bNou7B: (a, b) => [1,2,3],
+            kruj0XB: function(arr, obj, str, args) {
+              console.log('[VM]', arr, obj, str);
+              return {};
+            },
+            wEcR3bC: function(...args) {
+              console.log('[VM_INSTR]', args.length);
+              return args[args.length - 1];
+            },
+            
+            // Frida-specific globals
+            Interceptor: { attach: () => ({ onEnter: () => {}, onLeave: () => {} }) },
+            Module: { findExportByName: () => {}, getBaseAddress: () => {} },
+            NativePointer: function(addr) { return { toString: () => '0x' + addr }; },
+            NativeFunction: function() { return () => {}; },
+            ptr: (x) => ({ toString: () => '0x' + x }),
+            Memory: { readUtf8String: () => '', readByteArray: () => [] },
+            Process: { findModuleByName: () => ({ base: ptr(0) }) },
+            Java: { perform: (cb) => cb(), use: () => ({}) },
+            ObjC: { choose: (cb) => cb([]), classes: {} },
+            new NativeFunction: () => () => {}
           };
           
           vm.createContext(sandbox);
           
           try {
-            vm.runInContext(code, sandbox, { timeout: 10000 });
+            const result = vm.runInContext(code, sandbox, { 
+              timeout: 30000,
+              displayErrors: true
+            });
+            console.log('Execution completed');
           } catch(e) {
             console.log('Error:', e.message);
+            console.log('Stack:', e.stack);
           }
           EOF
           
-          node extract.js 2>&1 | tee output.log
+          node decrypt.js 2>&1 | tee output.log
+
+      - name: Extract all strings from log
+        run: |
+          grep -E '\[DECRYPTED\]|\[STRING\]' output.log > decrypted_strings.txt || echo "No decrypted strings found"
+          grep -E '\[VM\]' output.log > vm_calls.txt || echo "No VM calls found"
 
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: vm-output
-          path: output.log
+          name: decrypted
+          path: |
+            output.log
+            decrypted_strings.txt
+            vm_calls.txt
