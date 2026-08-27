@@ -61,17 +61,15 @@ jobs:
               return args[args.length - 1];
             },
             
-            // Frida-specific globals
             Interceptor: { attach: () => ({ onEnter: () => {}, onLeave: () => {} }) },
             Module: { findExportByName: () => {}, getBaseAddress: () => {} },
             NativePointer: function(addr) { return { toString: () => '0x' + addr }; },
-            NativeFunction: function() { return () => {}; },
+            NativeFunction: function() { return function() {}; },
             ptr: (x) => ({ toString: () => '0x' + x }),
             Memory: { readUtf8String: () => '', readByteArray: () => [] },
-            Process: { findModuleByName: () => ({ base: ptr(0) }) },
+            Process: { findModuleByName: () => ({ base: { toString: () => '0x0' } }) },
             Java: { perform: (cb) => cb(), use: () => ({}) },
-            ObjC: { choose: (cb) => cb([]), classes: {} },
-            new NativeFunction: () => () => {}
+            ObjC: { choose: (cb) => cb([]), classes: {} }
           };
           
           vm.createContext(sandbox);
@@ -94,6 +92,7 @@ jobs:
         run: |
           grep -E '\[DECRYPTED\]|\[STRING\]' output.log > decrypted_strings.txt || echo "No decrypted strings found"
           grep -E '\[VM\]' output.log > vm_calls.txt || echo "No VM calls found"
+          cat decrypted_strings.txt
 
       - name: Upload
         uses: actions/upload-artifact@v4
