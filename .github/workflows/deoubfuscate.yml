@@ -1,4 +1,4 @@
-name: Deobfuscate Custom VM
+name: Full Deobfuscation
 
 on:
   push:
@@ -18,55 +18,116 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install de4js
+      - name: Deobfuscate
         run: |
-          npm install -g de4js
-          which de4js || echo "de4js not found"
-
-      - name: Run de4js
-        run: |
-          npx de4js -i agent.js -o de4js_output.js || echo "npx de4js failed"
-
-      - name: Try manual extraction
-        run: |
-          node -e "
+          cat > deobfuscate.js << 'EOF'
           const fs = require('fs');
           const vm = require('vm');
           
-          const code = fs.readFileSync('agent.js', 'utf8');
+          let code = fs.readFileSync('agent.js', 'utf8');
           
-          const sandbox = {
-            console: {
-              log: (...args) => {
-                if (args[0] && typeof args[0] === 'string' && args[0].length > 3) {
-                  console.log('[EXTRACT]', args[0]);
-                }
-              }
-            },
+          // Извлекаем массив и строку из кода
+          const arrayMatch = code.match(/var tj09YHa = \[([^\]]+)\]/);
+          const stringMatch = code.match(/var VHZh42 = "([^"]+)"/);
+          
+          if (!arrayMatch || !stringMatch) {
+            console.log('Could not find array or string');
+            process.exit(1);
+          }
+          
+          // Создаем контекст с перехватом
+          const context = {
+            console: console,
             process: process,
             Buffer: Buffer,
             setTimeout: setTimeout,
-            setInterval: setInterval
+            setInterval: setInterval,
+            // Заглушки для функций
+            zQD7ADR: () => {},
+            yhIwiod: () => {},
+            bNou7B: () => {},
+            kruj0XB: () => {},
+            // Сам дешифратор
+            w7pcVa: function(seed, index, length) {
+              const result = this._w7pcVa(seed, index, length);
+              console.log(`[DECRYPT] ${seed}, ${index}, ${length} => "${result}"`);
+              return result;
+            },
+            _w7pcVa: function(seed, index, length) {
+              let result = "";
+              const VHZh42 = stringMatch[1];
+              for (let i = 0; i < length; i++) {
+                const key = ((seed ^ seed >>> 13) % 95 + 95) % 95;
+                const enc = VHZh42.charCodeAt(index + i) - 32;
+                const dec = ((enc - key) % 95 + 95) % 95;
+                result += String.fromCharCode(dec + 32);
+              }
+              return result;
+            }
           };
           
-          vm.createContext(sandbox);
+          vm.createContext(context);
           
+          // Выполняем код в контексте
           try {
-            const result = vm.runInContext(code, sandbox, {
-              timeout: 5000,
-              displayErrors: true
-            });
-            console.log('Execution completed');
-          } catch (e) {
-            console.log('Error:', e.message);
+            vm.runInContext(code, context, { timeout: 10000 });
+          } catch(e) {
+            console.log('Execution error:', e.message);
           }
-          " 2>&1 | tee extracted_strings.txt
+          EOF
 
-      - name: Upload result
+      - name: Run deobfuscator
+        run: node deobfuscate.js 2>&1 | tee decrypted.log
+
+      - name: Extract and replace strings
+        run: |
+          node -e "
+          const fs = require('fs');
+          let code = fs.readFileSync('agent.js', 'utf8');
+          
+          // Извлекаем VHZh42
+          const strMatch = code.match(/var VHZh42 = \"([^\"]+)\"/);
+          const VHZh42 = strMatch ? strMatch[1] : '';
+          
+          function w7pcVa(seed, index, length) {
+            let result = '';
+            for (let i = 0; i < length; i++) {
+              const key = ((seed ^ seed >>> 13) % 95 + 95) % 95;
+              const enc = VHZh42.charCodeAt(index + i) - 32;
+              const dec = ((enc - key) % 95 + 95) % 95;
+              result += String.fromCharCode(dec + 32);
+            }
+            return result;
+          }
+          
+          // Находим все вызовы w7pcVa
+          const pattern = /w7pcVa\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/g;
+          let match;
+          while ((match = pattern.exec(code)) !== null) {
+            const [_, seed, index, length] = match.map(Number);
+            const result = w7pcVa(seed, index, length);
+            const fullMatch = match[0];
+            // Экранируем кавычки
+            const escaped = result.replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"');
+            code = code.replace(fullMatch, `\"${escaped}\"`);
+          }
+          
+          fs.writeFileSync('deobfuscated.js', code);
+          console.log('Replaced all w7pcVa calls with decrypted strings');
+          "
+
+      - name: Final beautify
+        run: |
+          npm install -g js-beautify
+          js-beautify deobfuscated.js > final.js 2>/dev/null || true
+          if [ ! -s final.js ]; then
+            cp deobfuscated.js final.js
+          fi
+
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
           name: deobfuscated-code
           path: |
-            agent.js
-            de4js_output.js
-            extracted_strings.txt
+            final.js
+            decrypted.log
