@@ -19,23 +19,11 @@ jobs:
         run: |
           cat > extract.js << 'EOF'
           const fs = require('fs');
+          const vm = require('vm');
           
-          // Загружаем код
           const code = fs.readFileSync('agent.js', 'utf8');
           
-          // Создаем перехватчик для wEcR3bC (главная функция VM)
-          const originalCode = code.replace(
-            /function wEcR3bC\([^)]*\)\s*\{\s*\}/,
-            `function wEcR3bC(...args) {
-              console.log('[VM_INSTR]', args.map(a => typeof a === 'function' ? '[Function]' : a).join(', '));
-              return args[args.length - 1];
-            }`
-          );
-          
-          // Добавляем перехват результатов
-          const wrapper = `
-          const fs = require('fs');
-          const vm = require('vm');
+          const VHZh42 = code.match(/var VHZh42 = "([^"]+)"/)[1];
           
           const sandbox = {
             console: console,
@@ -43,9 +31,8 @@ jobs:
             Buffer: Buffer,
             setTimeout: setTimeout,
             setInterval: setInterval,
-            // Подменяем w7pcVa чтобы логировать расшифрованные строки
+            
             w7pcVa: function(seed, index, length) {
-              const VHZh42 = "${code.match(/var VHZh42 = "([^"]+)"/)[1]}";
               let result = '';
               for (let i = 0; i < length; i++) {
                 const key = ((seed ^ seed >>> 13) % 95 + 95) % 95;
@@ -53,38 +40,27 @@ jobs:
                 const dec = ((enc - key) % 95 + 95) % 95;
                 result += String.fromCharCode(dec + 32);
               }
-              console.log('[DECRYPT]', result);
+              console.log('[STRING]', result);
               return result;
             },
-            // Подменяем все функции, чтобы они логировали
-            zQD7ADR: function(x) { return x; },
-            yhIwiod: function(x) { return 0; },
-            bNou7B: function(a,b) { return []; },
-            kruj0XB: function(a,b,c,d) { 
-              console.log('[VM_CALL]', a, b, c);
-              return b; 
-            }
+            
+            zQD7ADR: () => 0,
+            yhIwiod: () => 0,
+            bNou7B: () => [],
+            kruj0XB: () => {},
+            wEcR3bC: () => {}
           };
           
           vm.createContext(sandbox);
           
           try {
-            const result = vm.runInContext(\`${originalCode}\`, sandbox, {
-              timeout: 30000,
-              displayErrors: true
-            });
-            console.log('Execution completed');
+            vm.runInContext(code, sandbox, { timeout: 10000 });
           } catch(e) {
             console.log('Error:', e.message);
           }
-          `;
-          
-          fs.writeFileSync('run.js', wrapper);
-          node run.js 2>&1 | tee output.log
           EOF
-
-      - name: Run extraction
-        run: node extract.js
+          
+          node extract.js 2>&1 | tee output.log
 
       - name: Upload
         uses: actions/upload-artifact@v4
