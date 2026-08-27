@@ -1,104 +1,47 @@
-name: Decrypt Frida Agent
+name: Deobfuscate Frida agent
 
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  decrypt:
+  deobfuscate:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: 20
 
-      - name: Extract strings
+      - name: Install formatters
+        run: npm install --no-save js-beautify prettier
+
+      - name: Prepare output directory
+        run: mkdir -p output
+
+      - name: Beautify JavaScript
         run: |
-          cat > decrypt.js << 'EOF'
-          const fs = require('fs');
-          const vm = require('vm');
-          
-          const code = fs.readFileSync('agent.js', 'utf8');
-          
-          const VHZh42 = code.match(/var VHZh42 = "([^"]+)"/)[1];
-          
-          const sandbox = {
-            console: {
-              log: (...args) => console.log('[LOG]', ...args),
-              error: (...args) => console.log('[ERR]', ...args)
-            },
-            process: process,
-            Buffer: Buffer,
-            setTimeout: setTimeout,
-            setInterval: setInterval,
-            clearTimeout: clearTimeout,
-            clearInterval: clearInterval,
-            
-            w7pcVa: function(seed, index, length) {
-              let result = '';
-              for (let i = 0; i < length; i++) {
-                const key = ((seed ^ seed >>> 13) % 95 + 95) % 95;
-                const enc = VHZh42.charCodeAt(index + i) - 32;
-                const dec = ((enc - key) % 95 + 95) % 95;
-                result += String.fromCharCode(dec + 32);
-              }
-              console.log('[DECRYPTED]', result);
-              return result;
-            },
-            
-            zQD7ADR: (x) => x,
-            yhIwiod: (arr) => arr.length,
-            bNou7B: (a, b) => [1,2,3],
-            kruj0XB: function(arr, obj, str, args) {
-              console.log('[VM]', arr, obj, str);
-              return {};
-            },
-            wEcR3bC: function(...args) {
-              console.log('[VM_INSTR]', args.length);
-              return args[args.length - 1];
-            },
-            
-            Interceptor: { attach: () => ({ onEnter: () => {}, onLeave: () => {} }) },
-            Module: { findExportByName: () => {}, getBaseAddress: () => {} },
-            NativePointer: function(addr) { return { toString: () => '0x' + addr }; },
-            NativeFunction: function() { return function() {}; },
-            ptr: (x) => ({ toString: () => '0x' + x }),
-            Memory: { readUtf8String: () => '', readByteArray: () => [] },
-            Process: { findModuleByName: () => ({ base: { toString: () => '0x0' } }) },
-            Java: { perform: (cb) => cb(), use: () => ({}) },
-            ObjC: { choose: (cb) => cb([]), classes: {} }
-          };
-          
-          vm.createContext(sandbox);
-          
-          try {
-            const result = vm.runInContext(code, sandbox, { 
-              timeout: 30000,
-              displayErrors: true
-            });
-            console.log('Execution completed');
-          } catch(e) {
-            console.log('Error:', e.message);
-            console.log('Stack:', e.stack);
-          }
-          EOF
-          
-          node decrypt.js 2>&1 | tee output.log
+          npx js-beautify agent.js \
+            --indent-size 2 \
+            --end-with-newline \
+            > output/fridaagent.beautified.js
 
-      - name: Extract all strings from log
+      - name: Search for suspicious operations
         run: |
-          grep -E '\[DECRYPTED\]|\[STRING\]' output.log > decrypted_strings.txt || echo "No decrypted strings found"
-          grep -E '\[VM\]' output.log > vm_calls.txt || echo "No VM calls found"
-          cat decrypted_strings.txt
+          grep -Ein \
+            'eval|Function|Interceptor|Java\.perform|Java\.use|Module\.find|Memory\.read|Memory\.write|send|recv|fetch|XMLHttpRequest|child_process|exec|spawn|process\.env' \
+            output/fridaagent.beautified.js \
+            > output/suspicious-lines.txt || true
 
-      - name: Upload
+      - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: decrypted
-          path: |
-            output.log
-            decrypted_strings.txt
-            vm_calls.txt
+          name: deobfuscated-frida-agent
+          path: output/
