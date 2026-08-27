@@ -1,18 +1,22 @@
 name: Deobfuscate Frida agent
 
 on:
+  push:
+    paths:
+      - "agent.js"
+      - ".github/workflows/deobfuscate.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  deobfuscate:
+  analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -20,28 +24,48 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install formatters
-        run: npm install --no-save js-beautify prettier
+      - name: Install tools
+        run: |
+          npm install --no-save webcrack js-beautify prettier
 
-      - name: Prepare output directory
+      - name: Prepare output
         run: mkdir -p output
 
-      - name: Beautify JavaScript
+      - name: Beautify agent.js
         run: |
           npx js-beautify agent.js \
             --indent-size 2 \
             --end-with-newline \
-            > output/fridaagent.beautified.js
+            > output/01-beautified.js
 
-      - name: Search for suspicious operations
+      - name: Deobfuscate with Webcrack
+        run: |
+          npx webcrack agent.js \
+            -o output/02-webcrack.js \
+            || cp output/01-beautified.js output/02-webcrack.js
+
+      - name: Format result
+        run: |
+          npx prettier \
+            --parser babel \
+            output/02-webcrack.js \
+            > output/03-formatted.js \
+            || cp output/02-webcrack.js output/03-formatted.js
+
+      - name: Extract important parts
         run: |
           grep -Ein \
-            'eval|Function|Interceptor|Java\.perform|Java\.use|Module\.find|Memory\.read|Memory\.write|send|recv|fetch|XMLHttpRequest|child_process|exec|spawn|process\.env' \
-            output/fridaagent.beautified.js \
-            > output/suspicious-lines.txt || true
+            'new Function|eval|Interceptor|Java\.perform|Java\.use|Module\.|Memory\.|send|recv|rpc\.exports|Process\.' \
+            output/03-formatted.js \
+            > output/api-and-dynamic-code.txt || true
+
+          grep -Ein \
+            'function w7pcVa|function zQD7ADR|function wEcR3bC|goGJrB|BgoXzjE|uMWblE|Sq9xcew' \
+            output/03-formatted.js \
+            > output/decoder-and-tables.txt || true
 
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
-          name: deobfuscated-frida-agent
+          name: deobfuscated-agent
           path: output/
